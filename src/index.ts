@@ -14,7 +14,15 @@ registerCommands(bot);registerInline(bot);
 bot.catch(err=>logger.error({err},'bot error'));
 
 await migrate();
-await bot.api.setMyCommands([{command:'start',description:'Start Quoridor'},{command:'profile',description:'View ELO profile'},{command:'leaderboard',description:'Global Top Duelists'},{command:'history',description:'Recent match history'},{command:'rules',description:'Game rules'},{command:'help',description:'How to play'}]);
+await bot.api.setMyCommands([
+  { command: 'start', description: 'Welcome & Main Menu' },
+  { command: 'newgame', description: 'Start game / Challenge' },
+  { command: 'profile', description: 'View ELO Profile Card' },
+  { command: 'leaderboard', description: 'Global Top Duelists' },
+  { command: 'history', description: 'Recent match history' },
+  { command: 'rules', description: 'Game rules' },
+  { command: 'help', description: 'How to play' }
+]);
 setInterval(() => {
   void forfeitExpiredGames().catch(e => logger.error({ err: e }, 'forfeit sweep'));
   void pruneAllOldGames(7).catch(e => logger.error({ err: e }, 'prune sweep'));

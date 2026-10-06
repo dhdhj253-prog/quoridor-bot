@@ -1,5 +1,5 @@
 import sharp from 'sharp';
-import { getEloGradient, getProgressToNextTier } from '../engine/elo.js';
+import { getEloGradient } from '../engine/elo.js';
 
 export interface UserProfileData {
   name: string;
@@ -14,7 +14,6 @@ export interface UserProfileData {
 
 export function generateProfileSvg(user: UserProfileData): string {
   const gradient = getEloGradient(user.elo);
-  const progress = getProgressToNextTier(user.elo);
   const totalGames = user.wins + user.losses;
   const winRate = totalGames > 0 ? ((user.wins / totalGames) * 100).toFixed(1) : '0.0';
 
@@ -30,105 +29,108 @@ export function generateProfileSvg(user: UserProfileData): string {
   const displayHandle = user.username ? `@${user.username}` : 'Quoridor Duelist';
 
   const streakText = user.currentStreak > 0
-    ? `🔥 ${user.currentStreak} Win Streak`
+    ? `🔥 ${user.currentStreak} Wins`
     : user.bestStreak > 0
-      ? `Best Streak: ${user.bestStreak}`
-      : 'No streak yet';
+      ? `Peak ${user.bestStreak} W`
+      : '0 Wins';
 
-  const progressBarWidth = 740;
-  const fillWidth = Math.max(12, Math.round((progress.percent / 100) * progressBarWidth));
+  const primaryColor = gradient.colors[0];
+  const secondaryColor = gradient.colors[gradient.colors.length - 1];
 
-  return `<svg width="860" height="480" viewBox="0 0 860 480" xmlns="http://www.w3.org/2000/svg">
+  return `<svg width="860" height="420" viewBox="0 0 860 420" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="tierGrad" x1="0%" y1="0%" x2="100%" y2="100%">
       ${stops}
     </linearGradient>
+    <linearGradient id="glowGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="${primaryColor}" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="${secondaryColor}" stop-opacity="0.8" />
+    </linearGradient>
     <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#12141c" />
-      <stop offset="50%" stop-color="#0e1017" />
-      <stop offset="100%" stop-color="#08090d" />
+      <stop offset="0%" stop-color="#141724" />
+      <stop offset="50%" stop-color="#0e1019" />
+      <stop offset="100%" stop-color="#08090f" />
     </linearGradient>
     <linearGradient id="cardGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#1a1d29" stop-opacity="0.85" />
-      <stop offset="100%" stop-color="#12141e" stop-opacity="0.95" />
+      <stop offset="0%" stop-color="#1d2133" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#111420" stop-opacity="0.95" />
     </linearGradient>
-    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="16" result="blur" />
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="22" result="blur" />
       <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+    <filter id="dropShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="${gradient.glow}" flood-opacity="0.4" />
     </filter>
   </defs>
 
-  <!-- Background Canvas -->
-  <rect width="860" height="480" rx="28" fill="url(#bgGrad)" />
-  <rect width="860" height="480" rx="28" fill="none" stroke="#262a3b" stroke-width="2" />
+  <!-- Canvas Background -->
+  <rect width="860" height="420" rx="30" fill="url(#bgGrad)" />
+  <rect width="860" height="420" rx="30" fill="none" stroke="url(#tierGrad)" stroke-width="2.5" opacity="0.6" />
 
-  <!-- Ambient Glow Background Accent -->
-  <circle cx="720" cy="110" r="140" fill="${gradient.glow}" opacity="0.14" filter="url(#glow)" />
-  <circle cx="100" cy="400" r="120" fill="${gradient.glow}" opacity="0.08" filter="url(#glow)" />
+  <!-- Ambient Radiant Lights -->
+  <circle cx="720" cy="90" r="160" fill="${gradient.glow}" opacity="0.22" filter="url(#glow)" />
+  <circle cx="120" cy="340" r="140" fill="${gradient.glow}" opacity="0.16" filter="url(#glow)" />
 
-  <!-- Inner Glass Container -->
-  <rect x="30" y="30" width="800" height="420" rx="22" fill="url(#cardGrad)" stroke="rgba(255,255,255,0.07)" stroke-width="1.5" />
+  <!-- Main Card Container -->
+  <rect x="25" y="25" width="810" height="370" rx="24" fill="url(#cardGrad)" stroke="rgba(255,255,255,0.08)" stroke-width="1.5" />
+
+  <!-- Top Ambient Banner Line -->
+  <rect x="25" y="25" width="810" height="4" rx="2" fill="url(#glowGrad)" />
 
   <!-- Header: Avatar & Name -->
   <g transform="translate(60, 65)">
-    <!-- Avatar circle placeholder -->
-    <rect x="0" y="0" width="68" height="68" rx="20" fill="#202436" stroke="url(#tierGrad)" stroke-width="2.5" />
-    <text x="34" y="44" font-family="'Segoe UI', Roboto, sans-serif" font-size="28" fill="#ffffff" text-anchor="middle">♟️</text>
+    <!-- Avatar Box -->
+    <rect x="0" y="0" width="76" height="76" rx="22" fill="#1b1f30" stroke="url(#tierGrad)" stroke-width="3" filter="url(#dropShadow)" />
+    <text x="38" y="50" font-family="'Segoe UI', Roboto, sans-serif" font-size="34" fill="#ffffff" text-anchor="middle">♟️</text>
 
-    <!-- Player Name & Handle -->
-    <text x="86" y="28" font-family="'Segoe UI', Roboto, sans-serif" font-size="26" font-weight="700" fill="#ffffff">${displayName}</text>
-    <text x="86" y="54" font-family="'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="500" fill="#8e9bb0">${displayHandle}</text>
+    <!-- Player Name & Tag -->
+    <text x="96" y="34" font-family="'Segoe UI', Roboto, sans-serif" font-size="30" font-weight="800" fill="#ffffff">${displayName}</text>
+    <text x="96" y="62" font-family="'Segoe UI', Roboto, sans-serif" font-size="17" font-weight="500" fill="#8e9bb0">${displayHandle}</text>
   </g>
 
-  <!-- ELO Score Display Box -->
-  <g transform="translate(560, 65)">
-    <rect x="0" y="0" width="210" height="74" rx="16" fill="${gradient.badgeBg}" stroke="url(#tierGrad)" stroke-width="2" />
-    <text x="105" y="46" font-family="'Segoe UI', Roboto, sans-serif" font-size="34" font-weight="800" fill="url(#tierGrad)" text-anchor="middle" filter="drop-shadow(0 2px 8px ${gradient.glow})">${user.elo} <tspan font-size="18" font-weight="600" fill="#a0aec0">ELO</tspan></text>
+  <!-- Big Colorful ELO Rating Banner -->
+  <g transform="translate(530, 65)">
+    <rect x="0" y="0" width="240" height="76" rx="20" fill="${gradient.badgeBg}" stroke="url(#tierGrad)" stroke-width="2.5" filter="url(#dropShadow)" />
+    <text x="120" y="52" font-family="'Segoe UI', Roboto, sans-serif" font-size="40" font-weight="900" fill="url(#tierGrad)" text-anchor="middle">${user.elo} <tspan font-size="20" font-weight="700" fill="#ffffff" opacity="0.85">ELO</tspan></text>
   </g>
 
-  <!-- Progress Bar to Next 200 ELO Bracket -->
-  <g transform="translate(60, 165)">
-    <text x="0" y="0" font-family="'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="600" fill="#a0aec0" letter-spacing="0.5">PROGRESS TO ${progress.nextTarget} ELO</text>
-    <text x="${progressBarWidth}" y="0" font-family="'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="700" fill="url(#tierGrad)" text-anchor="end">${progress.currentInTier} / 200 (${progress.percent}%)</text>
-    
-    <!-- Track -->
-    <rect x="0" y="12" width="${progressBarWidth}" height="14" rx="7" fill="#181a24" stroke="#2a2e42" stroke-width="1" />
-    <!-- Fill -->
-    <rect x="0" y="12" width="${fillWidth}" height="14" rx="7" fill="url(#tierGrad)" />
-  </g>
-
-  <!-- Stats Grid (4 Cards) -->
-  <g transform="translate(60, 240)">
+  <!-- 4 Vivid Stats Cards -->
+  <g transform="translate(55, 185)">
     <!-- Card 1: Matches -->
     <g transform="translate(0, 0)">
-      <rect width="170" height="150" rx="16" fill="#141622" stroke="#222638" stroke-width="1" />
-      <text x="20" y="36" font-family="'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="600" fill="#718096">GAMES</text>
-      <text x="20" y="78" font-family="'Segoe UI', Roboto, sans-serif" font-size="30" font-weight="700" fill="#ffffff">${totalGames}</text>
-      <text x="20" y="112" font-family="'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="600" fill="#48bb78">${user.wins}W <tspan fill="#718096">·</tspan> <tspan fill="#f56565">${user.losses}L</tspan></text>
+      <rect width="170" height="175" rx="18" fill="#141724" stroke="#252b40" stroke-width="1.5" />
+      <rect width="170" height="4" rx="2" fill="#4299e1" />
+      <text x="22" y="42" font-family="'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="700" fill="#718096" letter-spacing="1">GAMES</text>
+      <text x="22" y="92" font-family="'Segoe UI', Roboto, sans-serif" font-size="36" font-weight="800" fill="#ffffff">${totalGames}</text>
+      <text x="22" y="138" font-family="'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="700" fill="#48bb78">${user.wins}W <tspan fill="#718096">·</tspan> <tspan fill="#f56565">${user.losses}L</tspan></text>
     </g>
 
     <!-- Card 2: Winrate -->
-    <g transform="translate(190, 0)">
-      <rect width="170" height="150" rx="16" fill="#141622" stroke="#222638" stroke-width="1" />
-      <text x="20" y="36" font-family="'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="600" fill="#718096">WIN RATE</text>
-      <text x="20" y="78" font-family="'Segoe UI', Roboto, sans-serif" font-size="30" font-weight="700" fill="url(#tierGrad)">${winRate}%</text>
-      <text x="20" y="112" font-family="'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="500" fill="#8e9bb0">Competitve</text>
+    <g transform="translate(193, 0)">
+      <rect width="170" height="175" rx="18" fill="#141724" stroke="#252b40" stroke-width="1.5" />
+      <rect width="170" height="4" rx="2" fill="url(#tierGrad)" />
+      <text x="22" y="42" font-family="'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="700" fill="#718096" letter-spacing="1">WIN RATE</text>
+      <text x="22" y="92" font-family="'Segoe UI', Roboto, sans-serif" font-size="36" font-weight="800" fill="url(#tierGrad)">${winRate}%</text>
+      <text x="22" y="138" font-family="'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="600" fill="#a0aec0">Rated Arena</text>
     </g>
 
-    <!-- Card 3: Streak -->
-    <g transform="translate(380, 0)">
-      <rect width="170" height="150" rx="16" fill="#141622" stroke="#222638" stroke-width="1" />
-      <text x="20" y="36" font-family="'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="600" fill="#718096">FORM</text>
-      <text x="20" y="78" font-family="'Segoe UI', Roboto, sans-serif" font-size="22" font-weight="700" fill="#ffffff">${streakText}</text>
-      <text x="20" y="112" font-family="'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="500" fill="#ed8936">Peak: ${user.bestStreak} Wins</text>
+    <!-- Card 3: Form Streak -->
+    <g transform="translate(386, 0)">
+      <rect width="170" height="175" rx="18" fill="#141724" stroke="#252b40" stroke-width="1.5" />
+      <rect width="170" height="4" rx="2" fill="#ed8936" />
+      <text x="22" y="42" font-family="'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="700" fill="#718096" letter-spacing="1">STREAK</text>
+      <text x="22" y="92" font-family="'Segoe UI', Roboto, sans-serif" font-size="28" font-weight="800" fill="#ffffff">${streakText}</text>
+      <text x="22" y="138" font-family="'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="600" fill="#ed8936">Best: ${user.bestStreak} Wins</text>
     </g>
 
     <!-- Card 4: Peak ELO -->
-    <g transform="translate(570, 0)">
-      <rect width="170" height="150" rx="16" fill="#141622" stroke="#222638" stroke-width="1" />
-      <text x="20" y="36" font-family="'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="600" fill="#718096">PEAK ELO</text>
-      <text x="20" y="78" font-family="'Segoe UI', Roboto, sans-serif" font-size="30" font-weight="700" fill="#ffffff">${user.peakElo}</text>
-      <text x="20" y="112" font-family="'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="500" fill="#8e9bb0">All-time high</text>
+    <g transform="translate(579, 0)">
+      <rect width="170" height="175" rx="18" fill="#141724" stroke="#252b40" stroke-width="1.5" />
+      <rect width="170" height="4" rx="2" fill="#ffd700" />
+      <text x="22" y="42" font-family="'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="700" fill="#718096" letter-spacing="1">PEAK ELO</text>
+      <text x="22" y="92" font-family="'Segoe UI', Roboto, sans-serif" font-size="36" font-weight="800" fill="#ffffff">${user.peakElo}</text>
+      <text x="22" y="138" font-family="'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="600" fill="#ffd700">⭐ Top Rating</text>
     </g>
   </g>
 </svg>`;

@@ -42,10 +42,9 @@ export function registerCommands(bot: Bot) {
       return;
     }
 
+    const name = ctx.from?.first_name || 'Player';
     const kb = new InlineKeyboard()
-      .switchInline('👥 Play with friends', '')
-      .row()
-      .text('🤖 Practice vs Bot', 'practice')
+      .text('🎮 Play / New Game', 'nav_newgame')
       .row()
       .text('👤 My Profile', 'nav_profile')
       .text('🏆 Leaderboard', 'nav_leaderboard')
@@ -53,15 +52,36 @@ export function registerCommands(bot: Bot) {
       .text('📜 Match History', 'nav_history:0');
 
     await ctx.reply(
-      '♟ <b>Quoridor Arena</b>\n\n' +
-      'Play real-time 8×8 Quoridor matches with friends, climb the ELO rating ladder, and track your match history.\n\n' +
-      '• <b>Starting Rating:</b> 1200 ELO\n' +
-      '• <b>Commands:</b> /profile, /leaderboard, /history, /play, /rules',
+      `🏰 <b>Welcome to Quoridor Arena, ${name}!</b> ♟️\n\n` +
+      `Quoridor is an intense 8×8 strategy game where you race to the opposite end of the board while placing walls to trap and outwit your opponent.\n\n` +
+      `⭐ <b>Starting Rating:</b> 1200 ELO\n` +
+      `🏆 <b>Ranked Ladder:</b> Win PvP matches to climb the global leaderboard!\n\n` +
+      `🎮 <b>Quick Commands:</b>\n` +
+      `• /newgame — Start a game or challenge friends\n` +
+      `• /profile — View your gradient ELO card\n` +
+      `• /leaderboard — View global top duelists\n` +
+      `• /history — View recent match history\n` +
+      `• /rules — How to play`,
       {
         parse_mode: 'HTML',
         reply_markup: kb,
       }
     );
+  });
+
+  bot.command('newgame', async ctx => {
+    if (ctx.from) {
+      await upsertUser({ id: ctx.from.id, name: ctx.from.first_name, username: ctx.from.username, is_registered: true });
+    }
+    const kb = new InlineKeyboard()
+      .switchInline('👥 Play with friends', '')
+      .row()
+      .text('🤖 Practice vs Bot', 'practice');
+
+    await ctx.reply('⚔️ <b>Quoridor Game Lobby</b>\n\nChoose your game mode:', {
+      parse_mode: 'HTML',
+      reply_markup: kb,
+    });
   });
 
   bot.command(['profile', 'me', 'stats'], async ctx => {
@@ -123,6 +143,20 @@ export function registerCommands(bot: Bot) {
   registerReplayHandlers(bot);
 
   // Navigation Callback Queries
+  bot.callbackQuery('nav_newgame', async ctx => {
+    if (!ctx.from) return;
+    await ctx.answerCallbackQuery();
+    const kb = new InlineKeyboard()
+      .switchInline('👥 Play with friends', '')
+      .row()
+      .text('🤖 Practice vs Bot', 'practice');
+
+    await ctx.reply('⚔️ <b>Quoridor Game Lobby</b>\n\nChoose your game mode:', {
+      parse_mode: 'HTML',
+      reply_markup: kb,
+    });
+  });
+
   bot.callbackQuery('nav_profile', async ctx => {
     if (!ctx.from) return;
     await ctx.answerCallbackQuery();

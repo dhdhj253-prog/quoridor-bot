@@ -51,24 +51,21 @@ export function registerInline(bot: Bot) {
   bot.callbackQuery(/^join_open:(.+)$/, async ctx => {
     if (!ctx.from) return;
     const gameId = ctx.match[1];
-    const botUser = process.env.PUBLIC_BOT_USERNAME || 'quoridorplay_bot';
+    const botUser = (ctx.me?.username || process.env.PUBLIC_BOT_USERNAME || 'quoridorplay_bot').replace(/^@/, '');
 
     const registered = await isUserRegistered(ctx.from.id);
     if (!registered) {
       return ctx.answerCallbackQuery({
-        text: `⚠️ Please open @${botUser} and press /start first to register your profile & ELO rating!`,
-        show_alert: true
+        url: `https://t.me/${botUser}?start=register`
       });
     }
 
     await upsertUser({ id: ctx.from.id, name: ctx.from.first_name, username: ctx.from.username, is_registered: true });
-    const user = await getUser(ctx.from.id);
-    const userElo = user ? user.elo : 1200;
-    const p1Name = `${ctx.from.first_name || ctx.from.username || 'Player 1'} (${userElo} ELO)`;
+    const p1Name = ctx.from.first_name || ctx.from.username || 'Player 1';
 
     try {
       const g = await claimPlayer1(gameId, ctx.from.id, p1Name);
-      await ctx.answerCallbackQuery({ text: `🚀 Joined as Player 1 (${userElo} ELO)!` });
+      await ctx.answerCallbackQuery({ text: '🚀 Joined as Player 1!' });
 
       const text = `🏰 <b>QUORIDOR ARENA CHALLENGE</b>\n\n🚀 <b>Player 1 (Top):</b> ${g.state.p1_name}\n<i>Waiting for Player 2 to join…</i>\n\n👥 <b>Players: 1/2</b>`;
       const kb = joinKeyboard(g.id, 'p2');
@@ -101,24 +98,21 @@ export function registerInline(bot: Bot) {
   bot.callbackQuery(/^join_p2:(.+)$/, async ctx => {
     if (!ctx.from) return;
     const gameId = ctx.match[1];
-    const botUser = process.env.PUBLIC_BOT_USERNAME || 'quoridorplay_bot';
+    const botUser = (ctx.me?.username || process.env.PUBLIC_BOT_USERNAME || 'quoridorplay_bot').replace(/^@/, '');
 
     const registered = await isUserRegistered(ctx.from.id);
     if (!registered) {
       return ctx.answerCallbackQuery({
-        text: `⚠️ Please open @${botUser} and press /start first to register your profile & ELO rating!`,
-        show_alert: true
+        url: `https://t.me/${botUser}?start=register`
       });
     }
 
     await upsertUser({ id: ctx.from.id, name: ctx.from.first_name, username: ctx.from.username, is_registered: true });
-    const user = await getUser(ctx.from.id);
-    const userElo = user ? user.elo : 1200;
-    const p2Name = `${ctx.from.first_name || ctx.from.username || 'Player 2'} (${userElo} ELO)`;
+    const p2Name = ctx.from.first_name || ctx.from.username || 'Player 2';
 
     try {
       const activeGame = await joinGame(gameId, ctx.from.id, p2Name);
-      await ctx.answerCallbackQuery({ text: `👾 Joined as Player 2 (${userElo} ELO)! Match starting!` });
+      await ctx.answerCallbackQuery({ text: '👾 Joined as Player 2! Match starting!' });
 
       const kb = boardKeyboard(activeGame, 'move', Number(activeGame.p1_id));
       const text = gameText(activeGame, 'move');

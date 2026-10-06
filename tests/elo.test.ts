@@ -78,8 +78,8 @@ test('Profile Card SVG & Sharp PNG rendering', async () => {
   });
 
   assert.ok(svg.includes('1660'));
-  assert.ok(svg.includes('PROGRESS TO 1800 ELO'));
   assert.ok(svg.includes('Alex'));
+  assert.ok(svg.includes('GAMES'));
 
   const pngBuf = await renderProfileCard({
     name: 'Alex',
@@ -103,8 +103,8 @@ test('Database - Migrations, Gatekeeping & ELO Match Updates', async () => {
   assert.equal(isReg1, false);
 
   // Register users
-  await upsertUser({ id: 101, name: 'Alice', username: 'alice_q' });
-  await upsertUser({ id: 102, name: 'Bob', username: 'bob_q' });
+  await upsertUser({ id: 101, name: 'Alice', username: 'alice_q', is_registered: true });
+  await upsertUser({ id: 102, name: 'Bob', username: 'bob_q', is_registered: true });
 
   const isRegAlice = await isUserRegistered(101);
   assert.equal(isRegAlice, true);

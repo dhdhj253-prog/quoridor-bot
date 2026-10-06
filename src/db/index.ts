@@ -37,14 +37,15 @@ export async function isUserRegistered(tgId: number): Promise<boolean> {
 }
 
 export async function upsertUser(u: { id: number; name: string; username?: string; is_registered?: boolean }) {
+  const isReg = u.is_registered === true;
   await pool.query(
     `INSERT INTO users(tg_id, name, username, is_registered, elo, peak_elo, wins, losses, current_streak, best_streak)
      VALUES($1, $2, $3, $4, 1200, 1200, 0, 0, 0, 0)
      ON CONFLICT(tg_id) DO UPDATE SET
        name = EXCLUDED.name,
        username = COALESCE(EXCLUDED.username, users.username),
-       is_registered = COALESCE(EXCLUDED.is_registered, users.is_registered)`,
-    [u.id, u.name, u.username ?? null, u.is_registered ?? true]
+       is_registered = CASE WHEN $4 = true THEN true ELSE users.is_registered END`,
+    [u.id, u.name, u.username ?? null, isReg]
   );
 }
 

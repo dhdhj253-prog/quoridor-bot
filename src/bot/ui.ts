@@ -150,18 +150,15 @@ export function resultKeyboard(botUsername: string, id: string) {
 export function profileText(user: UserRow, rank: number): string {
   const total = user.wins + user.losses;
   const winRate = total > 0 ? ((user.wins / total) * 100).toFixed(1) : '0.0';
-  const progress = getProgressToNextTier(user.elo);
-  const bar = renderProgressBar(progress.percent, 10);
-  const streakText = user.current_streak > 0 ? `🔥 ${user.current_streak} Wins` : 'None';
+  const streakText = user.current_streak > 0 ? `🔥 ${user.current_streak} Wins` : '0';
 
-  return `👤 <b>${user.name || user.username || 'Player'}</b> (Rank #${rank})\n\n` +
-    `⭐ <b>Rating: ${user.elo} ELO</b> (Peak: ${user.peak_elo})\n` +
-    `📈 <b>Progress to ${progress.nextTarget}:</b> <code>[${bar}]</code> ${progress.currentInTier}/200 (${progress.percent}%)\n\n` +
+  return `👤 <b>${user.name || user.username || 'Player'}</b> · 🎖️ <b>Rank #${rank}</b>\n\n` +
+    `⭐ <b>Rating: ${user.elo} ELO</b> (Peak: ${user.peak_elo})\n\n` +
     `📊 <b>Statistics:</b>\n` +
     `• ⚔️ Total Games: <b>${total}</b>\n` +
     `• 🏆 Wins: <b>${user.wins}</b> | 🛡️ Losses: <b>${user.losses}</b> (<b>${winRate}%</b> WR)\n` +
     `• 🔥 Current Streak: <b>${streakText}</b>\n` +
-    `• 🎖️ Best Streak: <b>${user.best_streak}</b> Wins`;
+    `• 👑 Best Streak: <b>${user.best_streak}</b> Wins`;
 }
 
 export function formatHistoryMessage(user: UserRow, games: GameRow[], page: number, totalPages: number): { text: string; kb: InlineKeyboard } {
