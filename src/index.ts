@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { Bot, webhookCallback } from 'grammy';
 import pino from 'pino';
-import { migrate, pool, forfeitExpiredGames } from './db/index.js';
+import { migrate, pool, forfeitExpiredGames, pruneAllOldGames } from './db/index.js';
 import { registerCommands } from './bot/commands.js';
 import { registerInline } from './bot/inline.js';
 import { EnginePool } from './workers/pool.js';
@@ -14,8 +14,11 @@ registerCommands(bot);registerInline(bot);
 bot.catch(err=>logger.error({err},'bot error'));
 
 await migrate();
-await bot.api.setMyCommands([{command:'start',description:'Start Quoridor'},{command:'rules',description:'Game rules'},{command:'help',description:'How to play'},{command:'games',description:'Recent games'}]);
-setInterval(()=>void forfeitExpiredGames().catch(e=>logger.error({err:e},'forfeit sweep')),60_000);
+await bot.api.setMyCommands([{command:'start',description:'Start Quoridor'},{command:'profile',description:'View ELO profile'},{command:'leaderboard',description:'Global Top Duelists'},{command:'history',description:'Recent match history'},{command:'rules',description:'Game rules'},{command:'help',description:'How to play'}]);
+setInterval(() => {
+  void forfeitExpiredGames().catch(e => logger.error({ err: e }, 'forfeit sweep'));
+  void pruneAllOldGames(7).catch(e => logger.error({ err: e }, 'prune sweep'));
+}, 60_000);
 
 const port = Number(process.env.PORT || 3000);
 if (process.env.WEBHOOK_URL) {

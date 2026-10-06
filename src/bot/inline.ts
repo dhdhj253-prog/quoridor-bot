@@ -1,26 +1,42 @@
 import { InlineKeyboard, InputFile } from 'grammy';
 import type { Bot, Context } from 'grammy';
 import { randomUUID } from 'node:crypto';
-import { createGame, getGame, setInlineMessage, upsertUser, joinGame, setFirst, getGameByInlineMessage, userNames } from '../db/index.js';
-import { gameText, joinKeyboard, setupKeyboard, boardKeyboard, resultKeyboard, blueRedFor } from './ui.js';
+import {
+  createGame,
+  getGame,
+  setInlineMessage,
+  upsertUser,
+  getUser,
+  isUserRegistered,
+  joinGame,
+  setFirst,
+  getGameByInlineMessage,
+  userNames,
+  claimPlayer1,
+  resign,
+  commitMove,
+  createPracticeGame
+} from '../db/index.js';
+import { gameText, joinKeyboard, boardKeyboard, resultKeyboard, blueRedFor } from './ui.js';
 import { Engine, toEngineState, fromEngineState } from '../engine/index.js';
 import { enginePool } from '../index.js';
-import { botMovePractice } from './practice-runtime.js';
 import { THEME } from '../theme.js';
 import type { Player, Move, State } from '../types.js';
 
 export function registerInline(bot: Bot) {
   bot.on('inline_query', async ctx => {
     const gameId = randomUUID();
+    const botUser = process.env.PUBLIC_BOT_USERNAME || 'quoridorplay_bot';
+
     await ctx.answerInlineQuery([
       {
         type: 'article',
         id: `open:${gameId}`,
         title: '⚔️ Challenge a Friend to Quoridor 🚀',
-        description: 'Send an open 8×8 Quoridor challenge (both players join manually)',
+        description: 'Send an open 8×8 Quoridor ELO challenge match',
         thumbnail_url: 'https://cdn-icons-png.flaticon.com/512/3074/3074058.png',
         input_message_content: {
-          message_text: `🏰 <b>QUORIDOR CHALLENGE</b>\n\nTap below to join the match!\n👥 <b>Players: 0/2</b>`,
+          message_text: `🏰 <b>QUORIDOR ARENA CHALLENGE</b>\n\nTap below to join this rated match!\n<i>(Must have started @${botUser} first)</i>\n\n👥 <b>Players: 0/2</b>`,
           parse_mode: 'HTML'
         },
         reply_markup: joinKeyboard(gameId, 'open')
@@ -35,15 +51,26 @@ export function registerInline(bot: Bot) {
   bot.callbackQuery(/^join_open:(.+)$/, async ctx => {
     if (!ctx.from) return;
     const gameId = ctx.match[1];
-    await upsertUser({ id: ctx.from.id, name: ctx.from.first_name, username: ctx.from.username });
+    const botUser = process.env.PUBLIC_BOT_USERNAME || 'quoridorplay_bot';
 
-    const p1Name = ctx.from.first_name || ctx.from.username || 'Player 1';
-    const { claimPlayer1 } = await import('../db/index.js');
+    const registered = await isUserRegistered(ctx.from.id);
+    if (!registered) {
+      return ctx.answerCallbackQuery({
+        text: `⚠️ Please open @${botUser} and press /start first to register your profile & ELO rating!`,
+        show_alert: true
+      });
+    }
+
+    await upsertUser({ id: ctx.from.id, name: ctx.from.first_name, username: ctx.from.username, is_registered: true });
+    const user = await getUser(ctx.from.id);
+    const userElo = user ? user.elo : 1200;
+    const p1Name = `${ctx.from.first_name || ctx.from.username || 'Player 1'} (${userElo} ELO)`;
+
     try {
       const g = await claimPlayer1(gameId, ctx.from.id, p1Name);
-      await ctx.answerCallbackQuery({ text: '🚀 Joined as Player 1 (Top / Moves 1st)!' });
+      await ctx.answerCallbackQuery({ text: `🚀 Joined as Player 1 (${userElo} ELO)!` });
 
-      const text = `🏰 <b>QUORIDOR CHALLENGE</b>\n\n🚀 <b>Player 1 (Top):</b> ${g.state.p1_name}\n<i>Waiting for Player 2 to join…</i>\n\n👥 <b>Players: 1/2</b>`;
+      const text = `🏰 <b>QUORIDOR ARENA CHALLENGE</b>\n\n🚀 <b>Player 1 (Top):</b> ${g.state.p1_name}\n<i>Waiting for Player 2 to join…</i>\n\n👥 <b>Players: 1/2</b>`;
       const kb = joinKeyboard(g.id, 'p2');
 
       if (ctx.inlineMessageId) {
@@ -60,7 +87,7 @@ export function registerInline(bot: Bot) {
     } catch (e: any) {
       if (e.message === 'P1_ALREADY_CLAIMED') {
         await ctx.answerCallbackQuery({ text: '🚀 Player 1 already joined! Tap "Join as Player 2" to play.', show_alert: true });
-        const text = `🏰 <b>QUORIDOR CHALLENGE</b>\n\n<i>Waiting for Player 2 to join…</i>\n\n👥 <b>Players: 1/2</b>`;
+        const text = `🏰 <b>QUORIDOR ARENA CHALLENGE</b>\n\n<i>Waiting for Player 2 to join…</i>\n\n👥 <b>Players: 1/2</b>`;
         const kb = joinKeyboard(gameId, 'p2');
         if (ctx.inlineMessageId) {
           await ctx.api.editMessageReplyMarkupInline(ctx.inlineMessageId, { reply_markup: kb }).catch(() => {});
@@ -74,13 +101,24 @@ export function registerInline(bot: Bot) {
   bot.callbackQuery(/^join_p2:(.+)$/, async ctx => {
     if (!ctx.from) return;
     const gameId = ctx.match[1];
-    await upsertUser({ id: ctx.from.id, name: ctx.from.first_name, username: ctx.from.username });
+    const botUser = process.env.PUBLIC_BOT_USERNAME || 'quoridorplay_bot';
 
-    const p2Name = ctx.from.first_name || ctx.from.username || 'Player 2';
-    const { joinGame } = await import('../db/index.js');
+    const registered = await isUserRegistered(ctx.from.id);
+    if (!registered) {
+      return ctx.answerCallbackQuery({
+        text: `⚠️ Please open @${botUser} and press /start first to register your profile & ELO rating!`,
+        show_alert: true
+      });
+    }
+
+    await upsertUser({ id: ctx.from.id, name: ctx.from.first_name, username: ctx.from.username, is_registered: true });
+    const user = await getUser(ctx.from.id);
+    const userElo = user ? user.elo : 1200;
+    const p2Name = `${ctx.from.first_name || ctx.from.username || 'Player 2'} (${userElo} ELO)`;
+
     try {
       const activeGame = await joinGame(gameId, ctx.from.id, p2Name);
-      await ctx.answerCallbackQuery({ text: '👾 You joined as Player 2 (Bottom)! Match starting!' });
+      await ctx.answerCallbackQuery({ text: `👾 Joined as Player 2 (${userElo} ELO)! Match starting!` });
 
       const kb = boardKeyboard(activeGame, 'move', Number(activeGame.p1_id));
       const text = gameText(activeGame, 'move');
@@ -110,8 +148,7 @@ export function registerInline(bot: Bot) {
   bot.callbackQuery(/^practice$/, async ctx => {
     await ctx.answerCallbackQuery({ text: 'Starting practice…' });
     if (!ctx.from) return;
-    await upsertUser({ id: ctx.from.id, name: ctx.from.first_name, username: ctx.from.username });
-    const { createPracticeGame } = await import('../db/index.js');
+    await upsertUser({ id: ctx.from.id, name: ctx.from.first_name, username: ctx.from.username, is_registered: true });
     const g = await createPracticeGame(ctx.from.id);
     if (ctx.callbackQuery.message) {
       await ctx.editMessageText(gameText(g), {
@@ -132,15 +169,15 @@ export function registerInline(bot: Bot) {
   });
 
   bot.callbackQuery(/^join:(.+)$/, async ctx => {
-    // Backward compatibility for old challenge messages
     const id = ctx.match[1];
     const gameId = id.replace(/^(pending|open):/, '');
     const g = await getGame(gameId);
-    if (g && Number(g.p1_id) !== ctx.from?.id && !g.p2_id) {
-      const p2Name = ctx.from?.first_name || ctx.from?.username || 'Player 2';
-      const { joinGame } = await import('../db/index.js');
+    if (g && Number(g.p1_id) !== ctx.from?.id && !g.p2_id && ctx.from) {
+      await upsertUser({ id: ctx.from.id, name: ctx.from.first_name, username: ctx.from.username, is_registered: true });
+      const user = await getUser(ctx.from.id);
+      const p2Name = `${ctx.from.first_name || ctx.from.username || 'Player 2'} (${user?.elo || 1200} ELO)`;
       try {
-        const activeGame = await joinGame(g.id, ctx.from!.id, p2Name);
+        const activeGame = await joinGame(g.id, ctx.from.id, p2Name);
         await ctx.editMessageText(gameText(activeGame, 'move'), {
           parse_mode: 'HTML',
           reply_markup: boardKeyboard(activeGame, 'move', Number(activeGame.p1_id))
@@ -249,7 +286,6 @@ export function registerInline(bot: Bot) {
       return ctx.answerCallbackQuery({ text: '👁 Spectators cannot resign.', show_alert: true });
     }
 
-    const { resign } = await import('../db/index.js');
     try {
       const ng = await resign(g.id, actor);
       const isP1 = actor === blueId;
@@ -258,7 +294,24 @@ export function registerInline(bot: Bot) {
       const resignerLabel = isP1 ? p1Label : p2Label;
       const winnerLabel = isP1 ? p2Label : p1Label;
 
-      const msg = `🏰 <b>Quoridor</b> · Match Concluded\n${p1Label} (${g.state.walls[0]}🧱) · ${p2Label} (${g.state.walls[1]}🧱)\n\n🏳 <b>${resignerLabel} resigned.</b>\n🏆 <b>${winnerLabel} wins!</b>`;
+      let eloText = '';
+      if (ng.state.eloUpdate) {
+        const u = ng.state.eloUpdate;
+        const winnerName = isP1 ? (g.state.p2_name || 'Player 2') : (g.state.p1_name || 'Player 1');
+        const loserName = isP1 ? (g.state.p1_name || 'Player 1') : (g.state.p2_name || 'Player 2');
+        const wBefore = isP1 ? u.p2Before : u.p1Before;
+        const wAfter = isP1 ? u.p2After : u.p1After;
+        const wDelta = isP1 ? u.p2Delta : u.p1Delta;
+        const lBefore = isP1 ? u.p1Before : u.p2Before;
+        const lAfter = isP1 ? u.p1After : u.p2After;
+        const lDelta = isP1 ? u.p1Delta : u.p2Delta;
+
+        eloText = `\n\n📊 <b>Rating Changes:</b>\n` +
+          `👑 <b>${winnerName}:</b> ${wBefore} ➔ <b>${wAfter}</b> (<code>+${wDelta}</code>)\n` +
+          `⚔️ <b>${loserName}:</b> ${lBefore} ➔ <b>${lAfter}</b> (<code>${lDelta}</code>)`;
+      }
+
+      const msg = `🏰 <b>Quoridor Arena</b> · Match Concluded\n${p1Label} (${g.state.walls[0]}🧱) · ${p2Label} (${g.state.walls[1]}🧱)\n\n🏳 <b>${resignerLabel} resigned.</b>\n🏆 <b>${winnerLabel} wins!</b>${eloText}`;
       await ctx.answerCallbackQuery({ text: '🏳 You resigned.' });
 
       const kb = resultKeyboard(process.env.PUBLIC_BOT_USERNAME || 'quoridorplay_bot', g.id);
@@ -325,7 +378,6 @@ async function handleCell(ctx: Context, g: any, c: number, mode: 'move' | 'wall'
   let m: Move | null = null;
 
   if (mode === 'move') {
-    // Only controller (D-Pad) moves pawn:
     const validMoves = Engine.pawnMoves(e, who);
     if (validMoves.includes(c)) {
       m = { t: 'm', to: c, pv: s.pos[who] };
@@ -333,7 +385,6 @@ async function handleCell(ctx: Context, g: any, c: number, mode: 'move' | 'wall'
       return ctx.answerCallbackQuery({ text: 'Illegal move direction.' });
     }
   } else {
-    // Clicking ANY block on the board places a wall:
     if (Engine.wallLegal(e, c, who)) {
       if (s.walls[who] <= 0) {
         return ctx.answerCallbackQuery({ text: '🧱 You have 0 walls remaining!', show_alert: true });
@@ -347,7 +398,6 @@ async function handleCell(ctx: Context, g: any, c: number, mode: 'move' | 'wall'
     }
   }
 
-  // Ack callback immediately in background
   void ctx.answerCallbackQuery({ text: m.t === 'm' ? '🚶 Moved pawn' : '🧱 Placed wall' }).catch(() => {});
 
   const ns: State = {
@@ -370,7 +420,6 @@ async function handleCell(ctx: Context, g: any, c: number, mode: 'move' | 'wall'
   if (ns.over < 0 && Engine.pawnMoves(eg, (1 - who) as Player).length === 0 && ns.walls[1 - who] === 0) ns.turn = who;
 
   let botMoveObj: Move | null = null;
-  // In Practice vs Bot: calculate Bot counter-move directly for instant, seamless, zero-flicker response!
   if (g.vs_bot && ns.over < 0) {
     const thinkMs = Number(process.env.BOT_THINK_MS || 60);
     const result = await enginePool.think(toEngineState(ns), 1, thinkMs, []);
@@ -404,7 +453,6 @@ async function handleCell(ctx: Context, g: any, c: number, mode: 'move' | 'wall'
   }
 
   const status = ns.over >= 0 ? 'finished' : 'active';
-  const { commitMove } = await import('../db/index.js');
   try {
     const ng = await commitMove(g.id, actor, g.version, ns, m, status, ns.over >= 0 ? ns.over : null, botMoveObj);
     await editBoard(ctx, ng);
@@ -417,4 +465,3 @@ async function handleCell(ctx: Context, g: any, c: number, mode: 'move' | 'wall'
     if (e.message === 'STALE') await ctx.answerCallbackQuery({ text: 'That tap was already processed.' });
   }
 }
-

@@ -1,14 +1,33 @@
-import type { Bot } from 'grammy';
-import { InlineKeyboard } from 'grammy';
-import { recentGames, createPracticeGame, userNames, upsertUser } from '../db/index.js';
-import { boardKeyboard, gameText, resultKeyboard } from './ui.js';
-import { botMovePractice } from './practice-runtime.js';
+import type { Bot, Context } from 'grammy';
+import { InlineKeyboard, InputFile } from 'grammy';
+import {
+  recentGames,
+  createPracticeGame,
+  upsertUser,
+  getUser,
+  getUserRank,
+  countUserGames,
+  getLeaderboard
+} from '../db/index.js';
+import {
+  boardKeyboard,
+  gameText,
+  profileText,
+  formatHistoryMessage,
+  formatLeaderboardMessage
+} from './ui.js';
+import { renderProfileCard } from '../render/profile.js';
 import { registerReplayHandlers, handleReplay, handleReview } from './replay-handlers.js';
 
 export function registerCommands(bot: Bot) {
   bot.command('start', async ctx => {
     if (ctx.from) {
-      await upsertUser({ id: ctx.from.id, name: ctx.from.first_name, username: ctx.from.username });
+      await upsertUser({
+        id: ctx.from.id,
+        name: ctx.from.first_name,
+        username: ctx.from.username,
+        is_registered: true
+      });
     }
 
     const rawPayload = (ctx.match || ctx.msg?.text?.split(/\s+/)[1] || '').trim();
@@ -26,18 +45,44 @@ export function registerCommands(bot: Bot) {
     const kb = new InlineKeyboard()
       .switchInline('👥 Play with friends', '')
       .row()
-      .text('🤖 Practice vs Bot', 'practice');
+      .text('🤖 Practice vs Bot', 'practice')
+      .row()
+      .text('👤 My Profile', 'nav_profile')
+      .text('🏆 Leaderboard', 'nav_leaderboard')
+      .row()
+      .text('📜 Match History', 'nav_history:0');
 
-    await ctx.reply('♟ <b>Quoridor</b>\n\nPlay with friends inline or practice against the bot.', {
-      parse_mode: 'HTML',
-      reply_markup: kb,
-    });
+    await ctx.reply(
+      '♟ <b>Quoridor Arena</b>\n\n' +
+      'Play real-time 8×8 Quoridor matches with friends, climb the ELO rating ladder, and track your match history.\n\n' +
+      '• <b>Starting Rating:</b> 1200 ELO\n' +
+      '• <b>Commands:</b> /profile, /leaderboard, /history, /play, /rules',
+      {
+        parse_mode: 'HTML',
+        reply_markup: kb,
+      }
+    );
+  });
+
+  bot.command(['profile', 'me', 'stats'], async ctx => {
+    if (!ctx.from) return;
+    await sendUserProfile(ctx, ctx.from.id);
+  });
+
+  bot.command(['history', 'games'], async ctx => {
+    if (!ctx.from) return;
+    await sendUserHistory(ctx, ctx.from.id, 0);
+  });
+
+  bot.command(['leaderboard', 'top'], async ctx => {
+    if (!ctx.from) return;
+    await sendLeaderboard(ctx, ctx.from.id);
   });
 
   bot.command('play', async ctx => {
     if (ctx.chat.type !== 'private') return ctx.reply('Open the bot in a DM and use /play.');
     if (!ctx.from) return;
-    await upsertUser({ id: ctx.from.id, name: ctx.from.first_name, username: ctx.from.username });
+    await upsertUser({ id: ctx.from.id, name: ctx.from.first_name, username: ctx.from.username, is_registered: true });
     const g = await createPracticeGame(ctx.from.id);
     await ctx.reply(gameText(g), {
       parse_mode: 'HTML',
@@ -65,29 +110,115 @@ export function registerCommands(bot: Bot) {
     'help',
     ctx =>
       ctx.reply(
-        `📖 <b>How to Play</b>\n\n` +
-        `1. <b>Practice:</b> Send /play or tap "🤖 Practice vs Bot".\n` +
-        `2. <b>Challenge Friends:</b> Type @${process.env.PUBLIC_BOT_USERNAME || 'quoridorplay_bot'} in any chat and tap the card.\n` +
-        `3. <b>During Play:</b> Tap 🚶 Move for highlighted yellow dots 🟡, or tap 🧱 Wall and tap any empty tile to place a wall.\n` +
-        `4. <b>Replays:</b> When a match finishes, tap 🎞 720p Replay to generate an MP4 video of the match!`,
+        `📖 <b>How to Play & Commands</b>\n\n` +
+        `1. <b>/profile:</b> View your gradient ELO card & statistics.\n` +
+        `2. <b>/leaderboard:</b> View global top rated players.\n` +
+        `3. <b>/history:</b> View your recent match history with +/- ELO changes.\n` +
+        `4. <b>/play:</b> Start a practice match against the Bot.\n` +
+        `5. <b>Challenge Friends:</b> Type @${process.env.PUBLIC_BOT_USERNAME || 'quoridorplay_bot'} in any chat and send the card!`,
         { parse_mode: 'HTML' }
       )
   );
 
   registerReplayHandlers(bot);
 
-  bot.command('games', async ctx => {
+  // Navigation Callback Queries
+  bot.callbackQuery('nav_profile', async ctx => {
     if (!ctx.from) return;
-    const gs = await recentGames(ctx.from.id);
-    if (!gs.length) return ctx.reply('No games found yet. Use /play to start one!');
-    for (const g of gs) {
-      const result = g.winner ? `🏆 Winner ${g.winner}` : g.status;
-      await ctx.reply(`♟ Match <code>#${g.id.slice(0, 8)}</code> · ${result}`, {
-        parse_mode: 'HTML',
-        reply_markup: new InlineKeyboard()
-          .text('🎞 720p Replay', `replay:${g.id}`)
-          .text('📖 Review', `review:${g.id}`),
-      });
-    }
+    await ctx.answerCallbackQuery();
+    await sendUserProfile(ctx, ctx.from.id);
   });
+
+  bot.callbackQuery(/^nav_history:(\d+)$/, async ctx => {
+    if (!ctx.from) return;
+    const page = Number(ctx.match[1] || 0);
+    await ctx.answerCallbackQuery();
+    await sendUserHistory(ctx, ctx.from.id, page, true);
+  });
+
+  bot.callbackQuery('nav_leaderboard', async ctx => {
+    if (!ctx.from) return;
+    await ctx.answerCallbackQuery();
+    await sendLeaderboard(ctx, ctx.from.id, true);
+  });
+}
+
+async function sendUserProfile(ctx: Context, userId: number) {
+  let user = await getUser(userId);
+  if (!user && ctx.from) {
+    await upsertUser({ id: ctx.from.id, name: ctx.from.first_name, username: ctx.from.username, is_registered: true });
+    user = await getUser(userId);
+  }
+  if (!user) return ctx.reply('Profile not found. Please type /start to create your profile.');
+
+  const rank = await getUserRank(userId);
+  const caption = profileText(user, rank);
+  const kb = new InlineKeyboard()
+    .text('📜 Match History', 'nav_history:0')
+    .text('🏆 Leaderboard', 'nav_leaderboard')
+    .row()
+    .switchInline('👥 Challenge a Friend', '');
+
+  try {
+    const pngBuffer = await renderProfileCard({
+      name: user.name,
+      username: user.username,
+      elo: user.elo,
+      peakElo: user.peak_elo,
+      wins: user.wins,
+      losses: user.losses,
+      currentStreak: user.current_streak,
+      bestStreak: user.best_streak
+    });
+
+    await ctx.replyWithPhoto(new InputFile(pngBuffer, 'profile.png'), {
+      caption,
+      parse_mode: 'HTML',
+      reply_markup: kb
+    });
+  } catch (err) {
+    // Fallback to text profile if image rendering encounters an environment issue
+    await ctx.reply(caption, {
+      parse_mode: 'HTML',
+      reply_markup: kb
+    });
+  }
+}
+
+async function sendUserHistory(ctx: Context, userId: number, page: number = 0, isEdit: boolean = false) {
+  let user = await getUser(userId);
+  if (!user && ctx.from) {
+    await upsertUser({ id: ctx.from.id, name: ctx.from.first_name, username: ctx.from.username, is_registered: true });
+    user = await getUser(userId);
+  }
+  if (!user) return ctx.reply('Please /start the bot first.');
+
+  const pageSize = 5;
+  const totalGames = await countUserGames(userId);
+  const totalPages = Math.ceil(totalGames / pageSize) || 1;
+  const safePage = Math.max(0, Math.min(page, totalPages - 1));
+
+  const games = await recentGames(userId, pageSize, safePage * pageSize);
+  const { text, kb } = formatHistoryMessage(user, games, safePage, totalPages);
+
+  if (isEdit && ctx.callbackQuery?.message) {
+    await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb }).catch(async () => {
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+    });
+  } else {
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+  }
+}
+
+async function sendLeaderboard(ctx: Context, userId: number, isEdit: boolean = false) {
+  const topUsers = await getLeaderboard(10);
+  const { text, kb } = formatLeaderboardMessage(topUsers, userId);
+
+  if (isEdit && ctx.callbackQuery?.message) {
+    await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb }).catch(async () => {
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+    });
+  } else {
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+  }
 }
