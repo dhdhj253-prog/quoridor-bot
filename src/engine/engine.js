@@ -3,11 +3,15 @@ const WW=WW0||40;
 const N=8,S=64,WIN=100000,GOAL=[0,7],TO={};
 const ADJ=[],GC=[[],[]];
 for(let c=0;c<S;c++){const r=c>>3,k=c&7,a=[];[[-1,0],[1,0],[0,-1],[0,1]].forEach(([dr,dc])=>{const R=r+dr,K=k+dc;if(R>=0&&R<N&&K>=0&&K<N)a.push(R*N+K)});ADJ.push(a);if(r===0)GC[0].push(c);if(r===7)GC[1].push(c)}
-const Q=new Int8Array(S),E1=new Int8Array(S),E2=new Int8Array(S),SC=new Int8Array(S);
-function bfs(g,src,d){d=d||new Int8Array(S);d.fill(99);let h=0,t=0;
-for(let i=0;i<src.length;i++){const s=src[i];if(!g.blocked[s]){d[s]=0;Q[t++]=s}}
-while(h<t){const c=Q[h++],nd=d[c]+1,a=ADJ[c];for(let i=0;i<a.length;i++){const n=a[i];if(!g.blocked[n]&&d[n]===99){d[n]=nd;Q[t++]=n}}}
-return d}
+function bfs(g,src,d){
+  d = d || new Int8Array(S);
+  d.fill(99);
+  const q = new Int8Array(S);
+  let h=0,t=0;
+  for(let i=0;i<src.length;i++){const s=src[i];if(!g.blocked[s]){d[s]=0;q[t++]=s}}
+  while(h<t){const c=q[h++],nd=d[c]+1,a=ADJ[c];for(let i=0;i<a.length;i++){const n=a[i];if(!g.blocked[n]&&d[n]===99){d[n]=nd;q[t++]=n}}}
+  return d;
+}
 function pawnMoves(g,who){
   const p=g.pos[who],o=g.pos[1-who],res=[];
   const pr=p>>3,pc=p&7;
@@ -41,8 +45,16 @@ function pawnMoves(g,who){
   }
   return res;
 }
-function wallLegal(g,c,who){if(g.blocked[c]||c===g.pos[0]||c===g.pos[1]||g.walls[who]<1)return false;
-g.blocked[c]=1;const ok=bfs(g,GC[0])[g.pos[0]]<99&&bfs(g,GC[1])[g.pos[1]]<99;g.blocked[c]=0;return ok}
+function wallLegal(g,c,who){
+  if(g.blocked[c]||c===g.pos[0]||c===g.pos[1]||g.walls[who]<1)return false;
+  g.blocked[c]=1;
+  try {
+    const ok=bfs(g,GC[0])[g.pos[0]]<99&&bfs(g,GC[1])[g.pos[1]]<99;
+    return ok;
+  } finally {
+    g.blocked[c]=0;
+  }
+}
 /* fast bitboard distance: board is two 32-bit halves (rows 0-3 / rows 4-7); fl/fh = free-cell masks */
 const CL=0x01010101,CH=0x80808080;
 function dbit(row,from,fl,fh){let l=row===0?0xFF:0,h=row===7?0xFF000000:0;l&=fl;h&=fh;

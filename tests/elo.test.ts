@@ -160,3 +160,43 @@ test('History Pruning - Keeps only recent matches per user to prevent DB bloat',
   assert.ok(games.length <= 10);
 });
 
+test('Atomic executeMove - Turn switching, wall placement, and out-of-turn rejection', async () => {
+  const { executeMove, claimPlayer1 } = await import('../src/db/index.js');
+  const p1 = 701;
+  const p2 = 702;
+  await upsertUser({ id: p1, name: 'Ziprya', is_registered: true });
+  await upsertUser({ id: p2, name: 'Priyansh', is_registered: true });
+
+  const gameId = (await import('node:crypto')).randomUUID();
+  await claimPlayer1(gameId, p1, 'Ziprya');
+  const activeG = await joinGame(gameId, p2, 'Priyansh');
+
+  // Match started: Player 1 (Ziprya)'s turn (turn: 0)
+  // If Priyansh tries to move before Ziprya, it should be rejected with clear message
+  const p2EarlyRes = await executeMove(activeG.id, p2, { type: 'move', dir: 'up' });
+  assert.equal(p2EarlyRes.ok, false);
+  assert.ok(p2EarlyRes.error.includes("Ziprya's turn"));
+
+  // Ziprya makes a move downwards
+  const p1MoveRes = await executeMove(activeG.id, p1, { type: 'move', dir: 'down' });
+  assert.equal(p1MoveRes.ok, true);
+  assert.equal(p1MoveRes.game.state.turn, 1);
+
+  // Now it's Priyansh's turn: Ziprya cannot move
+  const p1EarlyRes = await executeMove(activeG.id, p1, { type: 'move', dir: 'down' });
+  assert.equal(p1EarlyRes.ok, false);
+  assert.ok(p1EarlyRes.error.includes("Priyansh's turn"));
+
+  // Priyansh places a wall on cell 18
+  const p2WallRes = await executeMove(activeG.id, p2, { type: 'wall', cell: 18 });
+  assert.equal(p2WallRes.ok, true);
+  assert.equal(p2WallRes.game.state.blocked[18], 1);
+  assert.equal(p2WallRes.game.state.walls[1], 7);
+  assert.equal(p2WallRes.game.state.turn, 0);
+
+  // Trying to place a wall on the same cell should report it's already placed
+  const p1SameWallRes = await executeMove(activeG.id, p1, { type: 'wall', cell: 18 });
+  assert.equal(p1SameWallRes.ok, false);
+  assert.ok(p1SameWallRes.error.includes("already placed"));
+});
+

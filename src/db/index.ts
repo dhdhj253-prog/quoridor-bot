@@ -245,10 +245,221 @@ async function processEloUpdateInternal(c: pg.PoolClient, gameId: string, g: Gam
   return { eloP1Before: p1Before, eloP1After: p1After, eloP2Before: p2Before, eloP2After: p2After };
 }
 
+export type MoveIntent = 
+  | { type: 'move'; dir?: string; targetCell?: number }
+  | { type: 'wall'; cell: number };
+
+export type ExecuteMoveResult =
+  | { ok: true; game: GameRow; move: Move; message: string }
+  | { ok: false; error: string; alert?: boolean };
+
+export async function executeMove(
+  gameId: string,
+  actorId: number,
+  intent: MoveIntent,
+  botThinkFn?: (state: any, who: number, ms: number) => Promise<any>
+): Promise<ExecuteMoveResult> {
+  const { Engine, toEngineState } = await import('../engine/index.js');
+  const c = await pool.connect();
+  try {
+    await c.query('BEGIN');
+    const q = await c.query<GameRow>('SELECT * FROM games WHERE id=$1 FOR UPDATE', [gameId]);
+    const g = q.rows[0];
+    if (!g) {
+      await c.query('ROLLBACK');
+      return { ok: false, error: 'Match not found or expired.' };
+    }
+    if (g.status !== 'active') {
+      await c.query('ROLLBACK');
+      return { ok: false, error: 'Match is no longer active.' };
+    }
+
+    const p1Id = Number(g.p1_id);
+    const p2Id = Number(g.p2_id);
+    if (actorId !== p1Id && actorId !== p2Id) {
+      await c.query('ROLLBACK');
+      return { ok: false, error: '👁 You are spectating this match.', alert: true };
+    }
+
+    const s = g.state;
+    const who: Player = actorId === p1Id ? 0 : 1;
+    if (s.turn !== who) {
+      const activeName = s.turn === 0 ? (s.p1_name || 'Player 1') : (s.p2_name || (g.vs_bot ? 'Bot' : 'Player 2'));
+      await c.query('ROLLBACK');
+      return { ok: false, error: `⏳ It's ${activeName}'s turn! Please wait for them to move.`, alert: true };
+    }
+
+    const e = toEngineState(s);
+    let m: Move;
+
+    if (intent.type === 'move') {
+      let targetCell = intent.targetCell;
+      if (targetCell == null && intent.dir) {
+        const validMoves = Engine.pawnMoves(e, who);
+        const pr = s.pos[who] >> 3;
+        const pc = s.pos[who] & 7;
+        const dir = intent.dir;
+
+        for (const cell of validMoves) {
+          const tr = cell >> 3;
+          const tc = cell & 7;
+          if (dir === 'up' && tr > pr && tc === pc) targetCell = cell;
+          else if (dir === 'down' && tr < pr && tc === pc) targetCell = cell;
+          else if (dir === 'left' && tr === pr && tc < pc) targetCell = cell;
+          else if (dir === 'right' && tr === pr && tc > pc) targetCell = cell;
+          else if (dir === 'upleft' && tr > pr && tc < pc) targetCell = cell;
+          else if (dir === 'upright' && tr > pr && tc > pc) targetCell = cell;
+          else if (dir === 'downleft' && tr < pr && tc < pc) targetCell = cell;
+          else if (dir === 'downright' && tr < pr && tc > pc) targetCell = cell;
+        }
+      }
+
+      if (targetCell == null) {
+        await c.query('ROLLBACK');
+        return { ok: false, error: '🚫 Blocked! You cannot move in that direction.' };
+      }
+
+      const validMoves = Engine.pawnMoves(e, who);
+      if (!validMoves.includes(targetCell)) {
+        await c.query('ROLLBACK');
+        return { ok: false, error: 'Illegal move direction.' };
+      }
+
+      m = { t: 'm', to: targetCell, pv: s.pos[who] };
+    } else {
+      const cell = intent.cell;
+      if (s.blocked[cell]) {
+        await c.query('ROLLBACK');
+        return { ok: false, error: '🧱 A wall is already placed here.' };
+      }
+      if (cell === s.pos[0] || cell === s.pos[1]) {
+        await c.query('ROLLBACK');
+        return { ok: false, error: '⚠️ Cannot place wall on a pawn. Move using the arrow buttons below.' };
+      }
+      if (s.walls[who] <= 0) {
+        await c.query('ROLLBACK');
+        return { ok: false, error: '🧱 You have 0 walls remaining!', alert: true };
+      }
+      if (!Engine.wallLegal(e, cell, who)) {
+        await c.query('ROLLBACK');
+        return { ok: false, error: '⚠️ Cannot place wall here: path would be completely blocked!' };
+      }
+
+      m = { t: 'w', c: cell };
+    }
+
+    const ns: State = {
+      ...s,
+      blocked: [...s.blocked],
+      pos: [...s.pos] as [number, number],
+      walls: [...s.walls] as [number, number],
+      ply: s.ply + 1,
+      turn: (1 - who) as Player,
+      lastMove: m.t === 'm' ? { from: m.pv, to: m.to } : { wall: m.c },
+      modeByPlayer: { ...s.modeByPlayer, [String(actorId)]: 'move' }
+    };
+    const eg = toEngineState(ns);
+    Engine.apply(eg, who, m as any);
+    ns.blocked = Array.from(eg.blocked);
+    ns.pos = [eg.pos[0], eg.pos[1]];
+    ns.walls = [eg.walls[0], eg.walls[1]];
+
+    if (m.t === 'm' && (m.to >> 3) === (who === 0 ? 0 : 7)) ns.over = who;
+    if (ns.over < 0 && Engine.pawnMoves(eg, (1 - who) as Player).length === 0 && ns.walls[1 - who] === 0) ns.turn = who;
+
+    let botMoveObj: Move | null = null;
+    if (g.vs_bot && ns.over < 0) {
+      let bm: Move | null = null;
+      if (botThinkFn) {
+        const thinkMs = Number(process.env.BOT_THINK_MS || 60);
+        const result = await botThinkFn(toEngineState(ns), 1, thinkMs);
+        bm = result?.m ?? null;
+      }
+      if (!bm || bm.t === 'p') {
+        const e2 = toEngineState(ns);
+        const pm = Engine.pawnMoves(e2, 1);
+        if (pm.length) bm = { t: 'm', to: pm[0], pv: ns.pos[1] };
+        else {
+          for (let c = 0; c < 64; c++) {
+            if (Engine.wallLegal(e2, c, 1)) {
+              bm = { t: 'w', c };
+              break;
+            }
+          }
+        }
+      }
+
+      if (bm) {
+        botMoveObj = bm;
+        ns.ply += 1;
+        ns.turn = 0;
+        ns.lastMove = bm.t === 'm' ? { from: bm.pv, to: bm.to } : { wall: (bm as any).c };
+        const e2 = toEngineState(ns);
+        Engine.apply(e2, 1, bm as any);
+        ns.blocked = Array.from(e2.blocked);
+        ns.pos = [e2.pos[0], e2.pos[1]];
+        ns.walls = [e2.walls[0], e2.walls[1]];
+        if (bm.t === 'm' && (bm.to >> 3) === 7) ns.over = 1;
+      }
+    }
+
+    const status = ns.over >= 0 ? 'finished' : 'active';
+    const from = m.t === 'm' ? (m.pv ?? null) : null;
+    const to = m.t === 'm' ? m.to : null;
+    const wall = m.t === 'w' ? m.c : null;
+    const humanPly = botMoveObj ? ns.ply - 1 : ns.ply;
+
+    await c.query(`INSERT INTO moves(game_id,ply,who,type,from_cell,to_cell,wall_cell) VALUES($1,$2,$3,$4,$5,$6,$7)`, [gameId, humanPly, actorId, m.t, from, to, wall]);
+
+    if (botMoveObj) {
+      const bFrom = botMoveObj.t === 'm' ? (botMoveObj.pv ?? null) : null;
+      const bTo = botMoveObj.t === 'm' ? botMoveObj.to : null;
+      const bWall = botMoveObj.t === 'w' ? botMoveObj.c : null;
+      const botId = Number(g.p2_id || -1);
+      await c.query(`INSERT INTO moves(game_id,ply,who,type,from_cell,to_cell,wall_cell) VALUES($1,$2,$3,$4,$5,$6,$7)`, [gameId, ns.ply, botId, botMoveObj.t, bFrom, bTo, bWall]);
+    }
+
+    const winnerDb = ns.over === -1 ? null : (ns.over === 0 ? p1Id : p2Id);
+
+    let eloInfo = { eloP1Before: null as number | null, eloP1After: null as number | null, eloP2Before: null as number | null, eloP2After: null as number | null };
+    if (status === 'finished' && winnerDb !== null) {
+      eloInfo = await processEloUpdateInternal(c, gameId, g, winnerDb, ns);
+    }
+
+    const r = await c.query<GameRow>(
+      `UPDATE games SET
+         state=$2, status=$3, winner=$4, version=version+1, last_move_at=now(),
+         ended_at=CASE WHEN $3 IN ('finished','resigned','forfeit') THEN now() ELSE ended_at END,
+         p1_elo_before=COALESCE($5, p1_elo_before),
+         p1_elo_after=COALESCE($6, p1_elo_after),
+         p2_elo_before=COALESCE($7, p2_elo_before),
+         p2_elo_after=COALESCE($8, p2_elo_after)
+       WHERE id=$1 RETURNING *`,
+      [gameId, JSON.stringify(ns), status, winnerDb, eloInfo.eloP1Before, eloInfo.eloP1After, eloInfo.eloP2Before, eloInfo.eloP2After]
+    );
+
+    await c.query('COMMIT');
+    if (status === 'finished' && p1Id && p2Id) {
+      void pruneOldGames([p1Id, p2Id]).catch(() => {});
+    }
+    return {
+      ok: true,
+      game: r.rows[0],
+      move: m,
+      message: m.t === 'm' ? '🚶 Moved pawn' : '🧱 Placed wall'
+    };
+  } catch (e: any) {
+    await c.query('ROLLBACK');
+    throw e;
+  } finally {
+    c.release();
+  }
+}
+
 export async function commitMove(
   id: string,
   actor: number,
-  expectedVersion: number,
+  expectedVersion: number | string,
   state: State,
   move: Move,
   status: string,
@@ -260,7 +471,7 @@ export async function commitMove(
     await c.query('BEGIN');
     const q = await c.query<GameRow>('SELECT * FROM games WHERE id=$1 FOR UPDATE', [id]);
     const g = q.rows[0];
-    if (!g || g.version !== expectedVersion) throw new Error('STALE');
+    if (!g || BigInt(g.version) !== BigInt(expectedVersion)) throw new Error('STALE');
     if (Number(g.p1_id) !== actor && Number(g.p2_id) !== actor) throw new Error('NOT_PLAYER');
 
     const from = move.t === 'm' ? (move.pv ?? null) : null;
@@ -288,12 +499,12 @@ export async function commitMove(
       `UPDATE games SET
          state=$2, status=$3, winner=$4, version=version+1, last_move_at=now(),
          ended_at=CASE WHEN $3 IN ('finished','resigned','forfeit') THEN now() ELSE ended_at END,
-         p1_elo_before=COALESCE($6, p1_elo_before),
-         p1_elo_after=COALESCE($7, p1_elo_after),
-         p2_elo_before=COALESCE($8, p2_elo_before),
-         p2_elo_after=COALESCE($9, p2_elo_after)
-       WHERE id=$1 AND version=$5 RETURNING *`,
-      [id, JSON.stringify(state), status, winnerDb, expectedVersion, eloInfo.eloP1Before, eloInfo.eloP1After, eloInfo.eloP2Before, eloInfo.eloP2After]
+         p1_elo_before=COALESCE($5, p1_elo_before),
+         p1_elo_after=COALESCE($6, p1_elo_after),
+         p2_elo_before=COALESCE($7, p2_elo_before),
+         p2_elo_after=COALESCE($8, p2_elo_after)
+       WHERE id=$1 RETURNING *`,
+      [id, JSON.stringify(state), status, winnerDb, eloInfo.eloP1Before, eloInfo.eloP1After, eloInfo.eloP2Before, eloInfo.eloP2After]
     );
 
     if (!r.rows[0]) throw new Error('STALE');
